@@ -1,0 +1,6 @@
+bitcoin
+ethereum
+solana
+dogecoin
+cardano
+bnb
