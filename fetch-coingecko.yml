@@ -2,7 +2,7 @@ name: Fetch CoinGecko snapshots
 
 on:
   schedule:
-    - cron: '*/30 * * * *'   # cada 30 minutos (ajusta a tu preferencia)
+    - cron: '*/30 * * * *'
   workflow_dispatch: {}
 
 concurrency:
@@ -21,15 +21,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-
-      - name: Ensure scripts executable
-        run: chmod +x scripts/fetch_and_prune.sh
-
-      - name: Run fetch and prune
+      - name: Run fetch script
+        run: |
+          chmod +x scripts/fetch_and_prune.sh
+          ./scripts/fetch_and_prune.sh
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}    # o usa ${{ secrets.GITHUB_TOKEN }} si prefieres
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_REF: ${{ github.ref }}
-        run: ./scripts/fetch_and_prune.sh
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
