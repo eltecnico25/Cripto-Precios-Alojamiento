@@ -1,7 +1,7 @@
 name: Fetch CoinGecko snapshots
 on:
   schedule:
-    - cron: '*/30 * * * *'
+    - cron: '0 */6 * * *'  # Cada 6 horas (más seguro para API free)
   workflow_dispatch: {}
 
 concurrency:
