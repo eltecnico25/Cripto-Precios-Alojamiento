@@ -1,6 +1,6 @@
-bitcoin
-ethereum
-solana
-dogecoin
-cardano
-bnb
+bitcoin, 9/4/2026
+ethereum, 9/4/2026
+solana, 9/4/2026
+dogecoin, 9/4/2026
+cardano, 1/4/2026
+bnb, 9/4/2026
