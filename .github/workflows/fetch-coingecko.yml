@@ -1,37 +1,29 @@
 name: Fetch CoinGecko snapshots
+
 on:
   schedule:
     - cron: '*/30 * * * *'
   workflow_dispatch: {}
+
+concurrency:
+  group: fetch-coingecko
+  cancel-in-progress: true
 
 jobs:
   fetch:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          persist-credentials: true
 
-      - name: Install jq & curl
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq jq curl
-
-      - name: Verify Environment
-        run: |
-          echo "📍 PWD: $(pwd)"
-          echo "🔧 JQ: $(jq --version)"
-          echo "🌐 CURL: $(curl --version | head -1)"
-          ls -la scripts/ coins_list.txt 2>/dev/null || echo "⚠️ Archivos faltantes"
-
-      - name: Run Fetch Script
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run fetch script
         run: |
           chmod +x scripts/fetch_and_prune.sh
-          # -x imprime cada comando. Si falla, GitHub lo marcará como ❌ visible.
-          bash -x scripts/fetch_and_prune.sh
+          ./scripts/fetch_and_prune.sh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
