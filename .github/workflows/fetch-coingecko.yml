@@ -3,7 +3,7 @@ name: Fetch CoinGecko snapshots
 on:
   # ⚠️ IMPORTANTE: 'schedule' debe estar indentado debajo de 'on'
   schedule:
-    - cron: '*/30 * * * *'  # Ejecutar cada 30 minutos (usa '*/5' para pruebas rápidas)
+    - cron: '*/05 * * * *'  # Ejecutar cada 30 minutos (usa '*/5' para pruebas rápidas)
   workflow_dispatch: {}     # Permite ejecución manual desde la web
 
 concurrency:
