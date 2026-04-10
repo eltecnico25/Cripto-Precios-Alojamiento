@@ -1,5 +1,2 @@
-bitcoin,bitcoin
 cardano,2026-04-10
-dogecoin,dogecoin
-ethereum,ethereum
 solana,2026-04-10
