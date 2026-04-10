@@ -4,3 +4,4 @@ cardano,2026-4-1
 dogecoin,2026-4-9
 ethereum,2026-4-9
 solana,2026-4-9
+pepe,2026-4-9
