@@ -40,11 +40,11 @@ else
 fi
 
 # Asegurar defaults
-for dc in bitcoin ethereum solana dogecoin cardano; do
-  if [ -z "${COIN_DATES[$dc]+x}" ]; then
-    COIN_DATES["$dc"]="$TODAY"
-  fi
-done
+#for dc in bitcoin ethereum solana dogecoin cardano; do
+#  if [ -z "${COIN_DATES[$dc]+x}" ]; then
+#    COIN_DATES["$dc"]="$TODAY"
+#  fi
+#done
 
 # Reescribir coins_list.txt limpio
 > "$COINS_FILE"
