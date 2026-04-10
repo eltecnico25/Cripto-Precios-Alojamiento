@@ -1,8 +1,7 @@
 name: Fetch CoinGecko snapshots
-
 on:
   schedule:
-    - cron: '*/30 * * * *'
+    - cron: '*/30 * * * *'  # Cada 30 minutos
   workflow_dispatch: {}
 
 concurrency:
@@ -14,16 +13,21 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: true
+
+      - name: Setup dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq curl git
 
       - name: Run fetch script
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           chmod +x scripts/fetch_and_prune.sh
           ./scripts/fetch_and_prune.sh
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
