@@ -1,4 +1,14 @@
 #!/usr/bin/env bash
+# === DEBUG MODE ===
+exec > >(tee -a "/tmp/fetch-debug-$(date +%s).log") 2>&1
+set -x  # Imprime cada comando antes de ejecutarlo
+echo "=== Script started at $(date -u) ==="
+echo "PWD: $(pwd)"
+echo "Files in repo: $(ls -la)"
+echo "coins_list.txt content:"
+cat coins_list.txt 2>/dev/null || echo "(not found)"
+echo "=== END DEBUG INFO ==="
+
 # Solo -u y pipefail; manejamos errores manualmente para evitar exit 1
 set -uo pipefail
 cd "$(dirname "$0")/.."
