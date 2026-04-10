@@ -6,33 +6,6 @@ cd "$(dirname "$0")/.."
 OUTFILE="data/snapshots.json"
 COINS_FILE="coins_list.txt"
 mkdir -p data
-# === 🔍 MÓDULO RESOLVER (Abreviatura → ID CoinGecko) ===
-SYM_CACHE="data/symbol_cache.json"
-[ -f "$SYM_CACHE" ] || echo '{}' > "$SYM_CACHE"
-
-resolve_id() {
-  local sym="${1,,}"  # Forzar minúsculas
-  # 1️⃣ Caché local (0 latencia)
-  local cached=$(jq -r --arg s "$sym" '.[$s] // empty' "$SYM_CACHE" 2>/dev/null)
-  [ -n "$cached" ] && echo "$cached" && return 0
-
-  # 2️⃣ Fallback a API (solo primera vez)
-  echo "  🔍 Resolviendo '$sym' vía API..."
-  local resp=$(curl -sS --max-time 10 "https://api.coingecko.com/api/v3/search?query=$sym" 2>/dev/null)
-  local id=$(echo "$resp" | jq -r --arg q "$sym" '
-    [.coins[] | select(.symbol | ascii_downcase == $q)]
-    | sort_by(.market_cap_rank // 999999)
-    | .[0].id // empty
-  ' 2>/dev/null)
-
-  if [ -n "$id" ]; then
-    jq --arg s "$sym" --arg i "$id" '. + {($s): $i}' "$SYM_CACHE" > "${SYM_CACHE}.tmp" 2>/dev/null && mv -f "${SYM_CACHE}.tmp" "$SYM_CACHE"
-    echo "$id"
-  else
-    echo "$sym" # Retorna el original si falla (evita romper el bucle)
-  fi
-}
-# ============================================
 
 TODAY=$(date -u +%Y-%m-%d)
 CUTOFF=$(date -u -d "2 days ago" +%Y-%m-%d 2>/dev/null || date -u -v-2d +%Y-%m-%d)
@@ -50,7 +23,6 @@ if [ -f "$COINS_FILE" ]; then
     [ -z "$line" ] && continue
     
     coin=$(echo "$line" | cut -d',' -f1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-    coin=$(resolve_id "$coin")  # 🔑 Convierte btc → bitcoin, paxg → pax-gold, etc.
     cdate=$(echo "$line" | cut -d',' -f2 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
     
     [ -z "$coin" ] && continue
@@ -274,7 +246,7 @@ echo "✅ Generated $OUTFILE with $COUNT coins"
 # --- Commit & Push ---
 git config user.name "github-actions[bot]" 2>/dev/null || true
 git config user.email "41898282+github-actions[bot]@users.noreply.github.com" 2>/dev/null || true
-git add "$OUTFILE" "$COINS_FILE" "$SYM_CACHE"
+git add "$OUTFILE" "$COINS_FILE" 2>/dev/null || true
 
 if git diff --cached --quiet 2>/dev/null; then
   echo "📦 No changes to commit"
