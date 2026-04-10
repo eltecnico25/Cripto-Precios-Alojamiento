@@ -1,130 +1,108 @@
 #!/usr/bin/env bash
-# Mantenemos -u y pipefail, pero añadimos trampa de errores para que NADA falle en silencio
-set -uo pipefail
-trap 'echo "❌ ERROR en línea $LINENO. Revisa los logs."; exit 1' ERR
-
+set -euo pipefail
 cd "$(dirname "$0")/.."
+
 OUTFILE="data/snapshots.json"
-COINS_FILE="coins_list.txt"
 mkdir -p data
 
-TODAY=$(date -u +%Y-%m-%d)
-CUTOFF=$(date -u -d "2 days ago" +%Y-%m-%d 2>/dev/null || date -u -v-2d +%Y-%m-%d)
-echo "=== 🚀 Fetch & Prune | $TODAY ==="
-
-# --- 1. Leer y depurar coins_list.txt ---
-declare -A COIN_DATES
-PRUNED_LIST=""
+# Coin list: read from coins_list.txt or use defaults
+DEFAULT_COINS="bitcoin ethereum solana dogecoin cardano"
+COINS_FILE="coins_list.txt"
 
 if [ -f "$COINS_FILE" ]; then
-  while IFS= read -r line || [ -n "$line" ]; do
-    line=$(echo "$line" | xargs)
-    [ -z "$line" ] && continue
-    
-    IFS=',' read -r coin cdate <<< "$line"
-    coin=$(echo "$coin" | xargs)
-    cdate=$(echo "${cdate:-}" | xargs)
-    
-    [ -z "$coin" ] && continue
-    
-    # Validar fecha o usar hoy
-    if [[ ! "$cdate" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || [[ "$cdate" < "$CUTOFF" ]]; then
-      echo "  🗑 PRUNED: $coin ($cdate)"
-      PRUNED_LIST="$PRUNED_LIST $coin"
-    else
-      COIN_DATES["$coin"]="$cdate"
-    fi
-  done < "$COINS_FILE"
-fi
-
-# Defaults seguros
-for dc in bitcoin ethereum solana dogecoin cardano; do
-  [ -z "${COIN_DATES[$dc]+x}" ] && COIN_DATES["$dc"]="$TODAY"
-done
-
-# Reescribir txt limpio
-> "$COINS_FILE"
-for c in "${!COIN_DATES[@]}"; do echo "$c,${COIN_DATES[$c]}" >> "$COINS_FILE"; done
-sort -o "$COINS_FILE" "$COINS_FILE"
-echo "  ✅ Coins activas: $(wc -l < "$COINS_FILE")"
-
-# --- 2. Evaluar estado del JSON ---
-EXISTING_DATE=""
-[ -f "$OUTFILE" ] && EXISTING_DATE=$(jq -r '.date // ""' "$OUTFILE" 2>/dev/null) || true
-
-SAME_DAY=0
-[ "$EXISTING_DATE" = "$TODAY" ] && SAME_DAY=1
-echo "  📅 JSON date: ${EXISTING_DATE:-none} | Mode: $([ $SAME_DAY -eq 1 ] && echo "SAME DAY" || echo "NEW DAY")"
-
-# --- 3. Determinar qué fetchear ---
-FETCH_LIST=()
-for coin in "${!COIN_DATES[@]}"; do
-  IN_JSON=0
-  if [ $SAME_DAY -eq 1 ] && [ -f "$OUTFILE" ]; then
-    jq -e --arg c "$coin" '.coins[$c]' "$OUTFILE" >/dev/null 2>&1 && IN_JSON=1
-  fi
-  
-  if [ $SAME_DAY -eq 1 ] && [ $IN_JSON -eq 1 ]; then
-    echo "  ⏭ SKIP: $coin"
-  else
-    echo "  📥 FETCH: $coin"
-    FETCH_LIST+=("$coin")
-  fi
-done
-
-[ ${#FETCH_LIST[@]} -eq 0 ] && echo "✅ Nada que actualizar. Saliendo." && exit 0
-
-# --- 4. Fetch & Build JSON seguro con jq ---
-# Inicializar mapa de monedas
-if [ $SAME_DAY -eq 1 ] && [ -f "$OUTFILE" ] && jq empty "$OUTFILE" 2>/dev/null; then
-  COINS_MAP=$(jq '.coins // {}' "$OUTFILE")
+  COINS=$(cat "$COINS_FILE" | tr '\n' ' ' | tr ',' ' ')
+  # merge defaults
+  for dc in $DEFAULT_COINS; do
+    echo "$COINS" | grep -qw "$dc" || COINS="$COINS $dc"
+  done
 else
-  COINS_MAP='{}'
+  COINS="$DEFAULT_COINS"
 fi
 
-for coin in "${FETCH_LIST[@]}"; do
-  echo "  🔍 Obteniendo $coin ..."
-  RESP=$(curl -sS --max-time 15 --retry 2 "https://api.coingecko.com/api/v3/coins/${coin}/market_chart?vs_currency=usd&days=35&interval=daily")
-  
-  # Validar respuesta
-  echo "$RESP" | jq -e '.error' >/dev/null 2>&1 && { echo "  ❌ API error para $coin"; continue; }
-  [ -z "$(echo "$RESP" | jq '.prices[0][1] // empty' 2>/dev/null)" ] && { echo "  ❌ Sin precios para $coin"; continue; }
+# Trim
+COINS=$(echo "$COINS" | xargs)
+echo "Fetching coins: $COINS"
 
-  # Extraer cierres a 23:59 UTC (simulado con punto más cercano del día)
-  ENTRY=$(echo "$RESP" | jq --arg c "$coin" '
-    .prices as $p |
-    ($p[-1][0]) as $now |
+NOW_ISO=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+# Build JSON array
+echo '{"updated":"'"$NOW_ISO"'","coins":[' > "$OUTFILE"
+
+FIRST=1
+for coin in $COINS; do
+  echo "  Processing $coin ..."
+
+  # Fetch 35 days of hourly data
+  RESP=$(curl -sS --retry 2 --retry-delay 5 \
+    "https://api.coingecko.com/api/v3/coins/${coin}/market_chart?vs_currency=usd&days=35")
+
+  if [ -z "$RESP" ] || echo "$RESP" | jq -e '.error' >/dev/null 2>&1; then
+    echo "  SKIP $coin (API error)"
+    continue
+  fi
+
+  # Use jq to extract nearest prices for each period
+  ENTRY=$(echo "$RESP" | jq --arg coin "$coin" --arg now "$NOW_ISO" '
+    def nearest(target_ms):
+      .prices | map({ts: .[0], p: .[1]})
+      | min_by((.ts - target_ms) | fabs)
+      | {price: .p, date: (.ts / 1000 | todate)};
+
+    (.prices[-1][0]) as $now_ms |
+    ($now_ms - 86400000) as $t24 |
+    ($now_ms - 172800000) as $t48 |
+    ($now_ms - 604800000) as $t7d |
+    ($now_ms - 691200000) as $t8d |
+    ($now_ms - 2505600000) as $t30d |
+    ($now_ms - 2592000000) as $t31d |
+
     {
-      d1:  ($p | map(select(.[0] < ($now - 86400000))) | last | .[1] // null),
-      d7:  ($p | map(select(.[0] < ($now - 604800000))) | last | .[1] // null),
-      d30: ($p | map(select(.[0] < ($now - 2505600000))) | last | .[1] // null)
+      coin: $coin,
+      current: {price: .prices[-1][1], date: (.prices[-1][0] / 1000 | todate)},
+      h24: nearest($t24),
+      h48: nearest($t48),
+      d7: nearest($t7d),
+      d8: nearest($t8d),
+      d29: nearest($t30d),
+      d30: nearest($t31d)
     }
-  ')
+  ' 2>/dev/null)
 
-  # Fusionar en el mapa
-  COINS_MAP=$(echo "$COINS_MAP" | jq --arg c "$coin" --argjson e "$ENTRY" '.[$c] = $e')
-  echo "  ✅ $coin procesado"
-  sleep 6
+  if [ -z "$ENTRY" ]; then
+    echo "  SKIP $coin (jq parse error)"
+    continue
+  fi
+
+  if [ "$FIRST" -eq 1 ]; then
+    FIRST=0
+  else
+    echo "," >> "$OUTFILE"
+  fi
+  echo "$ENTRY" >> "$OUTFILE"
+
+  # Rate limit: CoinGecko free = 10-30 req/min
+  sleep 7
 done
 
-# --- 5. Limpiar, validar y guardar ---
-COINS_MAP=$(echo "$COINS_MAP" | jq '
-  to_entries | map(.value |= del(.d3, .d9, .d32, .h24, .h48)) | from_entries
-')
+echo ']}'  >> "$OUTFILE"
 
-FINAL_JSON=$(jq -n --arg date "$TODAY" --argjson coins "$COINS_MAP" '{date:$date, coins:$coins}')
-echo "$FINAL_JSON" | jq '.' > "$OUTFILE" || { echo "❌ JSON inválido generado"; exit 1; }
-echo "✅ Guardado $OUTFILE ($(echo "$FINAL_JSON" | jq '.coins | length') monedas)"
+# Validate JSON
+if ! jq empty "$OUTFILE" 2>/dev/null; then
+  echo "ERROR: invalid JSON generated"
+  cat "$OUTFILE"
+  exit 1
+fi
 
-# --- 6. Git push seguro ---
-git config user.name "github-actions[bot]" 2>/dev/null || true
-git config user.email "41898282+github-actions[bot]@users.noreply.github.com" 2>/dev/null || true
-git add "$OUTFILE" "$COINS_FILE"
+echo "Generated $OUTFILE with $(jq '.coins | length' "$OUTFILE") coins"
 
+# Commit and push
+git config user.name "github-actions[bot]"
+git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+git add data/
 if git diff --cached --quiet; then
-  echo "📦 Sin cambios para commitear"
+  echo "No changes to commit"
 else
-  git commit -m "📊 snapshot $TODAY ($(date -u +%H:%M))"
+  git commit -m "data: snapshot $NOW_ISO"
   git push
-  echo "🚀 Push exitoso"
 fi
