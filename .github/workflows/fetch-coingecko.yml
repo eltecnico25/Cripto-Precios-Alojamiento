@@ -1,8 +1,10 @@
 name: Fetch CoinGecko snapshots
+
 on:
+  # ⚠️ IMPORTANTE: 'schedule' debe estar indentado debajo de 'on'
   schedule:
-    - cron: '*/05 * * * *'  # Cada 30 minutos
-  workflow_dispatch: {}
+    - cron: '*/30 * * * *'  # Ejecutar cada 30 minutos (usa '*/5' para pruebas rápidas)
+  workflow_dispatch: {}     # Permite ejecución manual desde la web
 
 concurrency:
   group: fetch-coingecko
@@ -14,20 +16,22 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Checkout
+      - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          persist-credentials: true
+          # ✅ Esto es crucial para que el script pueda hacer 'git push' sin errores
+          persist-credentials: true 
 
-      - name: Setup dependencies
+      - name: Install Dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq jq curl git
 
-      - name: Run fetch script
+      - name: Run Fetch Script
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           chmod +x scripts/fetch_and_prune.sh
-          ./scripts/fetch_and_prune.sh
+          # Usamos bash explícitamente para mejor manejo de logs
+          bash scripts/fetch_and_prune.sh
