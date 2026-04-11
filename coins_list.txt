@@ -1,9 +1,2 @@
 binancecoin,2026-04-10
 bitcoin,2026-04-11
-cardano,2026-04-11
-dogecoin,2026-04-11
-ethereum,2026-04-11
-pax-gold,2026-04-11
-pepe,2026-04-11
-ripple,2026-04-11
-solana,2026-04-11
