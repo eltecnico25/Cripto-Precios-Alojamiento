@@ -3,3 +3,4 @@ ethereum,2026-04-12
 solana,2026-04-12
 dogecoin,2026-04-12
 binancecoin,2026-04-12
+pepe,2026-04-12
