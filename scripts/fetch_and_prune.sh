@@ -4,7 +4,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 OUTFILE="data/snapshots.json"
-COINS_FILE="coins_list.txt"
+COINS_FILE="Cripto-Precios-Monedas/coins_list.txt"
 mkdir -p data
 
 TODAY=$(date -u +%Y-%m-%d)
