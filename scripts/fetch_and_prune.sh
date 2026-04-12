@@ -81,7 +81,7 @@ for coin in "${FETCH_LIST[@]}"; do
   echo "$RESP" | jq empty >/dev/null 2>&1 || { echo "  ❌ JSON inválido"; continue; }
 
   # Extracción segura en 1 llamada jq
-  ENTRY=$(echo "$RESP" | jq --arg d1 "$D1" --arg d2 "$D2" --arg d7 "$D7" --arg d8 "$D8" --arg d30 "$D30" --arg d31 "$D31" '
+  ENTRY=$(echo "$RESP" | jq -n \ --argjson d1 "$D1" --argjson d2 "$D2" \ --argjson d7 "$D7" --argjson d8 "$D8" \ --argjson d30 "$D30" --argjson d31 "$D31" \ '
     def get_close(t): .prices | map(select((.[0]/1000|todate|split("T")[0]) == t)) | if length > 0 then last | .[1] else null end;
     {($d1):(.|get_close($d1)), ($d2):(.|get_close($d2)), ($d7):(.|get_close($d7)), ($d8):(.|get_close($d8)), ($d30):(.|get_close($d30)), ($d31):(.|get_close($d31))}
   ' 2>/dev/null)
