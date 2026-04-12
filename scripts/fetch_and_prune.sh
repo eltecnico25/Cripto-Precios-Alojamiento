@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Solo -u y pipefail; manejamos errores manualmente
 set -uo pipefail
 cd "$(dirname "$0")/.."
 OUTFILE="data/snapshots.json"
@@ -64,32 +65,19 @@ for coin in "${!COIN_DATES[@]}"; do
 done
 echo "  📦 A consultar: ${FETCH_LIST[*]:-Ninguna}"
 
-# --- 4. Fetch & Merge (EXTRACCIÓN SEGURA EN 1 jq) ---
+# --- 4. Fetch & Merge (EXTRACCIÓN + FORMATEO EN 1 jq) ---
 for coin in "${FETCH_LIST[@]}"; do
   echo "  🔍 $coin ..."
   RESP=$(curl -sS --max-time 20 --retry 2 "https://api.coingecko.com/api/v3/coins/${coin}/market_chart?vs_currency=usd&days=35" 2>&1) || { echo "  ❌ curl"; continue; }
   echo "$RESP" | jq empty >/dev/null 2>&1 || { echo "  ❌ JSON inválido"; continue; }
 
-  # ✅ Extracción + formateo en 1 llamada jq: evita --argjson con strings inválidos
-  ENTRY=$(jq -n \
-    --argjson d1 "$D1" --argjson d2 "$D2" \
-    --argjson d7 "$D7" --argjson d8 "$D8" \
-    --argjson d30 "$D30" --argjson d31 "$D31" \
-    '{
-      ($d1):  (. | get_close($d1) | fmt),
-      ($d2):  (. | get_close($d2) | fmt),
-      ($d7):  (. | get_close($d7) | fmt),
-      ($d8):  (. | get_close($d8) | fmt),
-      ($d30): (. | get_close($d30) | fmt),
-      ($d31): (. | get_close($d31) | fmt)
-    }')
-    
+  # ✅ Extracción + formateo en 1 llamada jq: evita variables shell rotas
+  ENTRY=$(echo "$RESP" | jq --arg d1 "$D1" --arg d2 "$D2" --arg d7 "$D7" --arg d8 "$D8" --arg d30 "$D30" --arg d31 "$D31" '
     # Función: obtener último precio del día objetivo (simula close UTC)
     def get_close(t):
       .prices 
       | map(select((.[0]/1000 | todate | split("T")[0]) == t))
       | if length > 0 then last | .[1] else null end;
-      2>/dev/null
     
     # Función: formatear precio (>=1 → 2 decimales, <1 → 8 decimales)
     def fmt(p):
@@ -97,6 +85,16 @@ for coin in "${FETCH_LIST[@]}"; do
       elif p >= 1 then (p * 100 | round / 100)
       else (p * 100000000 | round / 100000000)
       end;
+    
+    {
+      ($d1):  (. | get_close($d1) | fmt),
+      ($d2):  (. | get_close($d2) | fmt),
+      ($d7):  (. | get_close($d7) | fmt),
+      ($d8):  (. | get_close($d8) | fmt),
+      ($d30): (. | get_close($d30) | fmt),
+      ($d31): (. | get_close($d31) | fmt)
+    }
+  ' 2>/dev/null)
 
   # Validar que ENTRY es JSON válido y no vacío
   if [ -z "$ENTRY" ] || [ "$ENTRY" = "null" ] || ! echo "$ENTRY" | jq empty 2>/dev/null; then
