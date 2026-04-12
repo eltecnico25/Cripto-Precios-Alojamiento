@@ -11,30 +11,6 @@
       "d7": 68319.44,
       "d30": 70794.09
     },
-    "ada": {
-      "d1": null,
-      "d2": null,
-      "d7": null,
-      "d8": null,
-      "d30": null,
-      "d31": null
-    },
-    "eth": {
-      "d1": null,
-      "d2": null,
-      "d7": null,
-      "d8": null,
-      "d30": null,
-      "d31": null
-    },
-    "btc": {
-      "d1": null,
-      "d2": null,
-      "d7": null,
-      "d8": null,
-      "d30": null,
-      "d31": null
-    },
     "doge": {
       "d1": 0.00005395,
       "d2": 0.00005370,
@@ -42,22 +18,6 @@
       "d8": 0.00005063,
       "d30": 0.00004528,
       "d31": 0.00004537
-    },
-    "sol": {
-      "d1": null,
-      "d2": null,
-      "d7": null,
-      "d8": null,
-      "d30": null,
-      "d31": null
-    },
-    "bnb": {
-      "d1": null,
-      "d2": null,
-      "d7": null,
-      "d8": null,
-      "d30": null,
-      "d31": null
     },
     "solana": {
       "d1": 84.93,
