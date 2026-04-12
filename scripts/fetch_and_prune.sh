@@ -4,6 +4,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 OUTFILE="data/snapshots.json"
+CHECKSUM_FILE="${OUTFILE}.sha256"
 COINS_FILE="coins_list.txt"
 mkdir -p data
 
@@ -13,20 +14,15 @@ CUTOFF=$(date -u -d "2 days ago" +%Y-%m-%d 2>/dev/null || date -u -v-2d +%Y-%m-%
 echo "=== Fetch & Prune — $TODAY ==="
 
 # --- Step 1: Leer coins_list.txt, eliminar entradas >2 días ---
-# Formato esperado: "bitcoin,2026-04-07"
 declare -A COIN_DATES
 PRUNED_LIST=""
-
 if [ -f "$COINS_FILE" ]; then
   while IFS= read -r line || [ -n "$line" ]; do
     line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
     [ -z "$line" ] && continue
-    
     coin=$(echo "$line" | cut -d',' -f1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
     cdate=$(echo "$line" | cut -d',' -f2 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-    
     [ -z "$coin" ] && continue
-    
     # Si no tiene fecha o es anterior al cutoff, se elimina
     if [ -z "$cdate" ] || [[ "$cdate" < "$CUTOFF" ]]; then
       echo "  🗑 PRUNED: $coin (date: ${cdate:-none}, older than 2 days)"
@@ -39,20 +35,12 @@ else
   echo "  ℹ No coins_list.txt found, using defaults"
 fi
 
-# Asegurar defaults
-#for dc in bitcoin ethereum solana dogecoin cardano; do
-#  if [ -z "${COIN_DATES[$dc]+x}" ]; then
-#    COIN_DATES["$dc"]="$TODAY"
-#  fi
-#done
-
 # Reescribir coins_list.txt limpio
 > "$COINS_FILE"
 for coin in "${!COIN_DATES[@]}"; do
   echo "$coin,${COIN_DATES[$coin]}" >> "$COINS_FILE"
 done
 sort -o "$COINS_FILE" "$COINS_FILE" 2>/dev/null || true
-
 echo "  ✅ Active coins: $(wc -l < "$COINS_FILE" 2>/dev/null || echo 0)"
 
 # --- Step 2: Cargar JSON existente, verificar fecha ---
@@ -60,7 +48,6 @@ EXISTING_DATE=""
 if [ -f "$OUTFILE" ] && jq empty "$OUTFILE" 2>/dev/null; then
   EXISTING_DATE=$(jq -r '.date // ""' "$OUTFILE" 2>/dev/null) || EXISTING_DATE=""
 fi
-
 echo "  📅 Existing JSON date: ${EXISTING_DATE:-none}"
 echo "  📅 Today: $TODAY"
 
@@ -81,7 +68,6 @@ for coin in "${!COIN_DATES[@]}"; do
   if [ "$SAME_DAY" -eq 1 ] && [ -f "$OUTFILE" ]; then
     IN_JSON=$(jq --arg c "$coin" 'if .coins and .coins[$c] then 1 else 0 end' "$OUTFILE" 2>/dev/null) || IN_JSON=0
   fi
-  
   if [ "$SAME_DAY" -eq 1 ] && [ "$IN_JSON" -eq 1 ]; then
     echo "  ⏭ SKIP: $coin (already in today's JSON)"
   elif [ "$SAME_DAY" -eq 1 ] && [ "$IN_JSON" -eq 0 ]; then
@@ -113,25 +99,19 @@ round_price() {
 }
 
 # --- Helper: Obtener precio a las 23:59 UTC de una fecha específica ---
-# CoinGecko interval=daily devuelve 1 punto por día ~00:00 UTC
-# Para simular "close" tomamos el último punto del día objetivo
 get_price_at_2359() {
   local json_data="$1"
   local target_date="$2"  # YYYY-MM-DD
-  
-  # Filtrar precios por fecha exacta y tomar el último del día (simula close)
   local price
   price=$(echo "$json_data" | jq --arg td "$target_date" '
     .prices 
     | map(select((.[0] / 1000 | todate | split("T")[0]) == $td))
     | if length > 0 then last | .[1] else null end
   ' 2>/dev/null) || price="null"
-  
   round_price "$price"
 }
 
 # --- Step 4: Fetch y construcción de entradas ---
-# Cargar JSON base (existente o vacío)
 if [ "$SAME_DAY" -eq 1 ] && [ -f "$OUTFILE" ]; then
   COINS_JSON=$(jq '.coins // {}' "$OUTFILE" 2>/dev/null) || COINS_JSON='{}'
 else
@@ -141,22 +121,18 @@ fi
 fetch_coin_data() {
   local coin="$1"
   local is_new="$2"  # 1=new, 0=existing
-  
   echo "  🔍 Fetching $coin (new=$is_new) ..."
-  
   local RESP
   RESP=$(curl -sS --max-time 20 --retry 2 --retry-delay 5 \
     "https://api.coingecko.com/api/v3/coins/${coin}/market_chart?vs_currency=usd&days=35" 2>&1) || {
     echo "  ❌ ERROR: $coin — curl failed"
     return 1
   }
-  
   # Validar JSON
   if [ -z "$RESP" ] || ! echo "$RESP" | jq empty 2>/dev/null; then
     echo "  ❌ ERROR: $coin — invalid JSON response"
     return 1
   fi
-  
   # Calcular fechas objetivo
   local d1 d7 d30
   d1=$(date -u -d "1 day ago" +%Y-%m-%d 2>/dev/null || date -u -v-1d +%Y-%m-%d)
@@ -175,11 +151,9 @@ fetch_coin_data() {
     d2=$(date -u -d "2 days ago" +%Y-%m-%d 2>/dev/null || date -u -v-2d +%Y-%m-%d)
     d8=$(date -u -d "8 days ago" +%Y-%m-%d 2>/dev/null || date -u -v-8d +%Y-%m-%d)
     d31=$(date -u -d "31 days ago" +%Y-%m-%d 2>/dev/null || date -u -v-31d +%Y-%m-%d)
-    
     p2=$(get_price_at_2359 "$RESP" "$d2")
     p8=$(get_price_at_2359 "$RESP" "$d8")
     p31=$(get_price_at_2359 "$RESP" "$d31")
-    
     entry=$(jq -n \
       --argjson d1 "$p1" --argjson d2 "$p2" \
       --argjson d7 "$p7" --argjson d8 "$p8" \
@@ -197,7 +171,6 @@ fetch_coin_data() {
     echo "  ❌ ERROR: $coin — jq merge failed"
     return 1
   }
-  
   echo "  ✅ OK: $coin"
   return 0
 }
@@ -205,16 +178,15 @@ fetch_coin_data() {
 # Fetch existentes (d1, d7, d30)
 for coin in "${FETCH_ALL[@]}"; do
   fetch_coin_data "$coin" 0 || true
-  sleep 8  # Rate limit respetuoso
+  sleep 8
 done
-
 # Fetch nuevas (d1, d2, d7, d8, d30, d31)
 for coin in "${FETCH_NEW[@]}"; do
   fetch_coin_data "$coin" 1 || true
   sleep 8
 done
 
-# --- Step 5: Limpiar campos obsoletos (d3, d9, d32) ---
+# --- Step 5: Limpiar campos obsoletos ---
 COINS_JSON=$(echo "$COINS_JSON" | jq '
   to_entries | map(
     .value |= (del(.d3) | del(.d9) | del(.d32))
@@ -238,19 +210,32 @@ if ! echo "$FINAL_JSON" | jq empty 2>/dev/null; then
   echo "❌ ERROR: Final JSON is invalid"
   exit 1
 fi
-
 echo "$FINAL_JSON" > "$OUTFILE"
+
+# 🔐 GENERAR SHA256 PARA INTEGRIDAD
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256sum "$OUTFILE" > "$CHECKSUM_FILE"
+elif command -v shasum >/dev/null 2>&1; then
+  shasum -a 256 "$OUTFILE" > "$CHECKSUM_FILE"
+else
+  echo "⚠️ WARNING: sha256sum/shasum not found. Skipping checksum."
+fi
+if [ -f "$CHECKSUM_FILE" ]; then
+  HASH=$(cut -d' ' -f1 "$CHECKSUM_FILE")
+  echo "✅ SHA256: $HASH"
+fi
+
 COUNT=$(echo "$FINAL_JSON" | jq '.coins | length' 2>/dev/null) || COUNT=0
 echo "✅ Generated $OUTFILE with $COUNT coins"
 
-# --- Commit & Push ---
+# --- Commit & Push (Incluye .sha256) ---
 git config user.name "github-actions[bot]" 2>/dev/null || true
 git config user.email "41898282+github-actions[bot]@users.noreply.github.com" 2>/dev/null || true
-git add "$OUTFILE" "$COINS_FILE" 2>/dev/null || true
+git add "$OUTFILE" "$COINS_FILE" "$CHECKSUM_FILE" 2>/dev/null || true
 
 if git diff --cached --quiet 2>/dev/null; then
   echo "📦 No changes to commit"
 else
-  git commit -m "📊 snapshot $TODAY ($COUNT coins)" 2>/dev/null || true
+  git commit -m "📊 snapshot $TODAY ($COUNT coins) [sha256: ${HASH:-none}]" 2>/dev/null || true
   git push 2>/dev/null || echo "⚠️ Push failed (local execution?)"
 fi
