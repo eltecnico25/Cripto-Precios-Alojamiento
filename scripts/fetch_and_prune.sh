@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
-# Sin -e. Manejamos errores manualmente para evitar abortos silenciosos
 set -uo pipefail
 cd "$(dirname "$0")/.."
-
 OUTFILE="data/snapshots.json"
 COINS_FILE="coins_list.txt"
 mkdir -p data
 
-echo "🚀 INICIO SCRIPT: $(date -u)"
+echo "🚀 INICIO: $(date -u)"
 TODAY=$(date -u +%Y-%m-%d)
 CUTOFF=$(date -u -d "2 days ago" +%Y-%m-%d 2>/dev/null || date -u -v-2d +%Y-%m-%d)
 
@@ -50,45 +48,61 @@ echo "  ✅ Active: $(wc -l < "$COINS_FILE" 2>/dev/null || echo 0)"
 
 # --- 2. Cargar JSON base ---
 EXISTING_DATE=""
-if [ -f "$OUTFILE" ] && jq empty "$OUTFILE" 2>/dev/null; then
-  EXISTING_DATE=$(jq -r '.date // ""' "$OUTFILE" 2>/dev/null) || EXISTING_DATE=""
-fi
+[ -f "$OUTFILE" ] && EXISTING_DATE=$(jq -r '.date // ""' "$OUTFILE" 2>/dev/null) || EXISTING_DATE=""
 COINS_JSON=$(jq '.coins // {}' "$OUTFILE" 2>/dev/null) || COINS_JSON='{}'
-echo "  📂 JSON existente: ${EXISTING_DATE:-vacio} | Same day: $([ "$EXISTING_DATE" = "$TODAY" ] && echo SI || echo NO)"
+echo "  📂 JSON existente: ${EXISTING_DATE:-vacio}"
 
 # --- 3. Determinar qué consultar ---
 FETCH_LIST=()
 for coin in "${!COIN_DATES[@]}"; do
-  IN_JSON=0
-  if [ "$EXISTING_DATE" = "$TODAY" ] && [ -f "$OUTFILE" ]; then
-    jq -e --arg c "$coin" '.coins[$c]' "$OUTFILE" >/dev/null 2>&1 && IN_JSON=1
-  fi
-  if [ "$EXISTING_DATE" = "$TODAY" ] && [ "$IN_JSON" -eq 1 ]; then
-    echo "  ⏭ SKIP: $coin"
+  if [ "$EXISTING_DATE" = "$TODAY" ]; then
+    jq -e --arg c "$coin" '.coins[$c]' "$OUTFILE" >/dev/null 2>&1 && echo "  ⏭ SKIP: $coin" || { echo "  📥 FETCH: $coin"; FETCH_LIST+=("$coin"); }
   else
     echo "  📥 FETCH: $coin"
     FETCH_LIST+=("$coin")
   fi
 done
+echo "  📦 A consultar: ${FETCH_LIST[*]:-Ninguna}"
 
-# ⚠️ NO SALIMOS SI LA LISTA ESTÁ VACÍA. Seguimos para actualizar la fecha.
-echo "  📦 Coins a consultar: ${FETCH_LIST[*]:-Ninguna}"
-
-# --- 4. Fetch & Merge ---
+# --- 4. Fetch & Merge (EXTRACCIÓN SEGURA EN 1 jq) ---
 for coin in "${FETCH_LIST[@]}"; do
-  echo "  🔍 Fetching $coin ..."
-  RESP=$(curl -sS --max-time 20 --retry 2 "https://api.coingecko.com/api/v3/coins/${coin}/market_chart?vs_currency=usd&days=35" 2>&1) || { echo "  ❌ curl falló"; continue; }
+  echo "  🔍 $coin ..."
+  RESP=$(curl -sS --max-time 20 --retry 2 "https://api.coingecko.com/api/v3/coins/${coin}/market_chart?vs_currency=usd&days=35" 2>&1) || { echo "  ❌ curl"; continue; }
   echo "$RESP" | jq empty >/dev/null 2>&1 || { echo "  ❌ JSON inválido"; continue; }
 
-  # Extracción segura en 1 llamada jq
-  ENTRY=$(echo "$RESP" | jq -n \ --argjson d1 "$D1" --argjson d2 "$D2" \ --argjson d7 "$D7" --argjson d8 "$D8" \ --argjson d30 "$D30" --argjson d31 "$D31" \ '
-    def get_close(t): .prices | map(select((.[0]/1000|todate|split("T")[0]) == t)) | if length > 0 then last | .[1] else null end;
-    {($d1):(.|get_close($d1)), ($d2):(.|get_close($d2)), ($d7):(.|get_close($d7)), ($d8):(.|get_close($d8)), ($d30):(.|get_close($d30)), ($d31):(.|get_close($d31))}
+  # ✅ Extracción + formateo en 1 llamada jq: evita --argjson con strings inválidos
+  ENTRY=$(echo "$RESP" | jq --arg d1 "$D1" --arg d2 "$D2" --arg d7 "$D7" --arg d8 "$D8" --arg d30 "$D30" --arg d31 "$D31" '
+    # Función: obtener último precio del día objetivo (simula close UTC)
+    def get_close(t):
+      .prices 
+      | map(select((.[0]/1000 | todate | split("T")[0]) == t))
+      | if length > 0 then last | .[1] else null end;
+    
+    # Función: formatear precio (>=1 → 2 decimales, <1 → 8 decimales)
+    def fmt(p):
+      if p == null then null
+      elif p >= 1 then (p * 100 | round / 100)
+      else (p * 100000000 | round / 100000000)
+      end;
+    
+    {
+      ($d1):  (. | get_close($d1) | fmt),
+      ($d2):  (. | get_close($d2) | fmt),
+      ($d7):  (. | get_close($d7) | fmt),
+      ($d8):  (. | get_close($d8) | fmt),
+      ($d30): (. | get_close($d30) | fmt),
+      ($d31): (. | get_close($d31) | fmt)
+    }
   ' 2>/dev/null)
 
-  [ -z "$ENTRY" ] && echo "  ❌ No se extrajeron precios" && continue
-  COINS_JSON=$(echo "$COINS_JSON" | jq --arg c "$coin" --argjson e "$ENTRY" '.[$c] = $e') || { echo "  ❌ merge falló"; continue; }
-  echo "  ✅ $coin procesado"
+  # Validar que ENTRY es JSON válido y no vacío
+  if [ -z "$ENTRY" ] || [ "$ENTRY" = "null" ] || ! echo "$ENTRY" | jq empty 2>/dev/null; then
+    echo "  ❌ No se extrajeron precios válidos"; continue
+  fi
+
+  # Fusionar en COINS_JSON
+  COINS_JSON=$(echo "$COINS_JSON" | jq --arg c "$coin" --argjson e "$ENTRY" '.[$c] = $e' 2>/dev/null) || { echo "  ❌ merge falló"; continue; }
+  echo "  ✅ $coin → $(echo "$ENTRY" | jq -r 'to_entries | map(.key) | join(", ")')"
   sleep 6
 done
 
@@ -96,10 +110,11 @@ done
 for pruned in $PRUNED_LIST; do COINS_JSON=$(echo "$COINS_JSON" | jq --arg c "$pruned" 'del(.[$c])' 2>/dev/null) || true; done
 
 FINAL_JSON=$(jq -n --arg date "$TODAY" --argjson coins "$COINS_JSON" '{date:$date, coins:$coins}')
-echo "$FINAL_JSON" | jq empty >/dev/null 2>&1 || { echo "❌ JSON final inválido. Abortando."; exit 1; }
-
+if ! echo "$FINAL_JSON" | jq empty 2>/dev/null; then
+  echo "❌ JSON final inválido. Abortando."; exit 1
+fi
 echo "$FINAL_JSON" > "$OUTFILE"
-echo "💾 JSON escrito exitosamente con fecha: $TODAY"
+echo "💾 JSON escrito: $TODAY"
 
 # 🔐 SHA256
 if command -v sha256sum >/dev/null 2>&1; then sha256sum "$OUTFILE" > "${OUTFILE}.sha256"; fi
@@ -110,9 +125,9 @@ git config user.email "41898282+github-actions[bot]@users.noreply.github.com" 2>
 git add "$OUTFILE" "$COINS_FILE" "${OUTFILE}.sha256" 2>/dev/null || true
 
 if git diff --cached --quiet 2>/dev/null; then
-  echo "📦 Sin cambios nuevos para commitear"
+  echo "📦 Sin cambios nuevos"
 else
   git commit -m "📊 snapshot $TODAY" >/dev/null 2>&1
   git push >/dev/null 2>&1 || echo "⚠️ Push fallido"
 fi
-echo "🏁 SCRIPT FINALIZADO"
+echo "🏁 FINALIZADO"
