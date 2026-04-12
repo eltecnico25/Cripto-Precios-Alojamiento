@@ -71,7 +71,7 @@ for coin in "${FETCH_LIST[@]}"; do
   echo "$RESP" | jq empty >/dev/null 2>&1 || { echo "  ❌ JSON inválido"; continue; }
 
   # ✅ Extracción + formateo en 1 llamada jq: evita --argjson con strings inválidos
-  ENTRY=$(echo "$RESP" | jq --arg d1 "$D1" --arg d2 "$D2" --arg d7 "$D7" --arg d8 "$D8" --arg d30 "$D30" --arg d31 "$D31" '
+  ENTRY=$(echo "$RESP" | jq --arg d1 "$D1" --arg d2 "$D2" --arg d7 "$D7" --arg d8 "$D8" --arg d30 "$D30" --arg d31 "$D31" 
     # Función: obtener último precio del día objetivo (simula close UTC)
     def get_close(t):
       .prices 
@@ -85,7 +85,7 @@ for coin in "${FETCH_LIST[@]}"; do
       else (p * 100000000 | round / 100000000)
       end;
     
-    {
+    '{
       ($d1):  (. | get_close($d1) | fmt),
       ($d2):  (. | get_close($d2) | fmt),
       ($d7):  (. | get_close($d7) | fmt),
