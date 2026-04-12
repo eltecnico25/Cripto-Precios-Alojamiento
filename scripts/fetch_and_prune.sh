@@ -71,20 +71,10 @@ for coin in "${FETCH_LIST[@]}"; do
   echo "$RESP" | jq empty >/dev/null 2>&1 || { echo "  ❌ JSON inválido"; continue; }
 
   # ✅ Extracción + formateo en 1 llamada jq: evita --argjson con strings inválidos
-  ENTRY=$(echo "$RESP" | jq --arg d1 "$D1" --arg d2 "$D2" --arg d7 "$D7" --arg d8 "$D8" --arg d30 "$D30" --arg d31 "$D31" 
-    # Función: obtener último precio del día objetivo (simula close UTC)
-    def get_close(t):
-      .prices 
-      | map(select((.[0]/1000 | todate | split("T")[0]) == t))
-      | if length > 0 then last | .[1] else null end;
-    
-    # Función: formatear precio (>=1 → 2 decimales, <1 → 8 decimales)
-    def fmt(p):
-      if p == null then null
-      elif p >= 1 then (p * 100 | round / 100)
-      else (p * 100000000 | round / 100000000)
-      end;
-    
+  ENTRY=$(jq -n \
+    --argjson d1 "$D1" --argjson d2 "$D2" \
+    --argjson d7 "$D7" --argjson d8 "$D8" \
+    --argjson d30 "$D30" --argjson d31 "$D31" \
     '{
       ($d1):  (. | get_close($d1) | fmt),
       ($d2):  (. | get_close($d2) | fmt),
@@ -92,8 +82,21 @@ for coin in "${FETCH_LIST[@]}"; do
       ($d8):  (. | get_close($d8) | fmt),
       ($d30): (. | get_close($d30) | fmt),
       ($d31): (. | get_close($d31) | fmt)
-    }
-  ' 2>/dev/null)
+    }')
+    
+    # Función: obtener último precio del día objetivo (simula close UTC)
+    def get_close(t):
+      .prices 
+      | map(select((.[0]/1000 | todate | split("T")[0]) == t))
+      | if length > 0 then last | .[1] else null end;
+      2>/dev/null
+    
+    # Función: formatear precio (>=1 → 2 decimales, <1 → 8 decimales)
+    def fmt(p):
+      if p == null then null
+      elif p >= 1 then (p * 100 | round / 100)
+      else (p * 100000000 | round / 100000000)
+      end;
 
   # Validar que ENTRY es JSON válido y no vacío
   if [ -z "$ENTRY" ] || [ "$ENTRY" = "null" ] || ! echo "$ENTRY" | jq empty 2>/dev/null; then
