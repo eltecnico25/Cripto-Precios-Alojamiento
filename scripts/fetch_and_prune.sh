@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Solo -u y pipefail; manejamos errores manualmente
+# Sin -e. Manejamos errores manualmente para evitar abortos silenciosos
 set -uo pipefail
 cd "$(dirname "$0")/.."
+
 OUTFILE="data/snapshots.json"
 COINS_FILE="coins_list.txt"
 mkdir -p data
 
+echo "🚀 INICIO SCRIPT: $(date -u)"
 TODAY=$(date -u +%Y-%m-%d)
 CUTOFF=$(date -u -d "2 days ago" +%Y-%m-%d 2>/dev/null || date -u -v-2d +%Y-%m-%d)
 
@@ -17,7 +19,7 @@ D8=$(date -u -d "8 days ago" +%Y-%m-%d 2>/dev/null || date -u -v-8d +%Y-%m-%d)
 D30=$(date -u -d "30 days ago" +%Y-%m-%d 2>/dev/null || date -u -v-30d +%Y-%m-%d)
 D31=$(date -u -d "31 days ago" +%Y-%m-%d 2>/dev/null || date -u -v-31d +%Y-%m-%d)
 
-echo "=== Fetch & Prune — $TODAY ==="
+echo "📅 TODAY: $TODAY | CUTOFF: $CUTOFF"
 
 # --- 1. Leer y depurar coins_list.txt ---
 declare -A COIN_DATES
@@ -37,7 +39,7 @@ if [ -f "$COINS_FILE" ]; then
     fi
   done < "$COINS_FILE"
 else
-  echo "  ℹ No coins_list.txt found"
+  echo "  ℹ $COINS_FILE no encontrado"
 fi
 
 # Reescribir txt limpio
@@ -46,79 +48,71 @@ for coin in "${!COIN_DATES[@]}"; do echo "$coin,${COIN_DATES[$coin]}" >> "$COINS
 sort -o "$COINS_FILE" "$COINS_FILE" 2>/dev/null || true
 echo "  ✅ Active: $(wc -l < "$COINS_FILE" 2>/dev/null || echo 0)"
 
-# --- 2. Determinar qué consultar ---
+# --- 2. Cargar JSON base ---
 EXISTING_DATE=""
-[ -f "$OUTFILE" ] && EXISTING_DATE=$(jq -r '.date // ""' "$OUTFILE" 2>/dev/null) || EXISTING_DATE=""
+if [ -f "$OUTFILE" ] && jq empty "$OUTFILE" 2>/dev/null; then
+  EXISTING_DATE=$(jq -r '.date // ""' "$OUTFILE" 2>/dev/null) || EXISTING_DATE=""
+fi
 COINS_JSON=$(jq '.coins // {}' "$OUTFILE" 2>/dev/null) || COINS_JSON='{}'
+echo "  📂 JSON existente: ${EXISTING_DATE:-vacio} | Same day: $([ "$EXISTING_DATE" = "$TODAY" ] && echo SI || echo NO)"
 
+# --- 3. Determinar qué consultar ---
 FETCH_LIST=()
 for coin in "${!COIN_DATES[@]}"; do
-  if [ "$EXISTING_DATE" = "$TODAY" ]; then
-    jq -e --arg c "$coin" '.coins[$c]' "$OUTFILE" >/dev/null 2>&1 && echo "  ⏭ SKIP: $coin" || { echo "  📥 FETCH: $coin"; FETCH_LIST+=("$coin"); }
+  IN_JSON=0
+  if [ "$EXISTING_DATE" = "$TODAY" ] && [ -f "$OUTFILE" ]; then
+    jq -e --arg c "$coin" '.coins[$c]' "$OUTFILE" >/dev/null 2>&1 && IN_JSON=1
+  fi
+  if [ "$EXISTING_DATE" = "$TODAY" ] && [ "$IN_JSON" -eq 1 ]; then
+    echo "  ⏭ SKIP: $coin"
   else
     echo "  📥 FETCH: $coin"
     FETCH_LIST+=("$coin")
   fi
 done
 
-[ ${#FETCH_LIST[@]} -eq 0 ] && echo "✅ Sin pendientes. Saliendo." && exit 0
+# ⚠️ NO SALIMOS SI LA LISTA ESTÁ VACÍA. Seguimos para actualizar la fecha.
+echo "  📦 Coins a consultar: ${FETCH_LIST[*]:-Ninguna}"
 
-# --- 3. Fetch & Extracción SEGURA (1 llamada jq por moneda) ---
+# --- 4. Fetch & Merge ---
 for coin in "${FETCH_LIST[@]}"; do
-  echo "  🔍 $coin ..."
-  RESP=$(curl -sS --max-time 20 --retry 2 "https://api.coingecko.com/api/v3/coins/${coin}/market_chart?vs_currency=usd&days=35" 2>&1) || { echo "  ❌ curl"; continue; }
+  echo "  🔍 Fetching $coin ..."
+  RESP=$(curl -sS --max-time 20 --retry 2 "https://api.coingecko.com/api/v3/coins/${coin}/market_chart?vs_currency=usd&days=35" 2>&1) || { echo "  ❌ curl falló"; continue; }
   echo "$RESP" | jq empty >/dev/null 2>&1 || { echo "  ❌ JSON inválido"; continue; }
 
-  # ✅ Extracción pura en jq: evita variables shell vacías y garantiza JSON válido
+  # Extracción segura en 1 llamada jq
   ENTRY=$(echo "$RESP" | jq --arg d1 "$D1" --arg d2 "$D2" --arg d7 "$D7" --arg d8 "$D8" --arg d30 "$D30" --arg d31 "$D31" '
-    def get_close(t):
-      .prices | map(select((.[0]/1000|todate|split("T")[0]) == t))
-      | if length > 0 then last | .[1] else null end;
-    {
-      ($d1):  (. | get_close($d1)),
-      ($d2):  (. | get_close($d2)),
-      ($d7):  (. | get_close($d7)),
-      ($d8):  (. | get_close($d8)),
-      ($d30): (. | get_close($d30)),
-      ($d31): (. | get_close($d31))
-    }
+    def get_close(t): .prices | map(select((.[0]/1000|todate|split("T")[0]) == t)) | if length > 0 then last | .[1] else null end;
+    {($d1):(.|get_close($d1)), ($d2):(.|get_close($d2)), ($d7):(.|get_close($d7)), ($d8):(.|get_close($d8)), ($d30):(.|get_close($d30)), ($d31):(.|get_close($d31))}
   ' 2>/dev/null)
 
-  if [ -z "$ENTRY" ] || [ "$ENTRY" = "null" ]; then
-    echo "  ❌ No se extrajeron fechas"; continue
-  fi
-
-  COINS_JSON=$(echo "$COINS_JSON" | jq --arg c "$coin" --argjson e "$ENTRY" '.[$c] = $e' 2>/dev/null) || { echo "  ❌ merge falló"; continue; }
-  echo "  ✅ $coin → $(echo "$ENTRY" | jq -r "keys | join(\", \")")"
+  [ -z "$ENTRY" ] && echo "  ❌ No se extrajeron precios" && continue
+  COINS_JSON=$(echo "$COINS_JSON" | jq --arg c "$coin" --argjson e "$ENTRY" '.[$c] = $e') || { echo "  ❌ merge falló"; continue; }
+  echo "  ✅ $coin procesado"
   sleep 6
 done
 
-# --- 4. Limpiar, validar y guardar ---
-# Eliminar monedas que fueron podadas del txt
-for pruned in $PRUNED_LIST; do
-  COINS_JSON=$(echo "$COINS_JSON" | jq --arg c "$pruned" 'del(.[$c])' 2>/dev/null) || true
-done
+# --- 5. Limpieza, validación y ESCRITURA FORZADA ---
+for pruned in $PRUNED_LIST; do COINS_JSON=$(echo "$COINS_JSON" | jq --arg c "$pruned" 'del(.[$c])' 2>/dev/null) || true; done
 
 FINAL_JSON=$(jq -n --arg date "$TODAY" --argjson coins "$COINS_JSON" '{date:$date, coins:$coins}')
-if ! echo "$FINAL_JSON" | jq empty 2>/dev/null; then
-  echo "❌ JSON final inválido. Abortando para proteger datos."
-  exit 1
-fi
+echo "$FINAL_JSON" | jq empty >/dev/null 2>&1 || { echo "❌ JSON final inválido. Abortando."; exit 1; }
+
 echo "$FINAL_JSON" > "$OUTFILE"
+echo "💾 JSON escrito exitosamente con fecha: $TODAY"
 
 # 🔐 SHA256
 if command -v sha256sum >/dev/null 2>&1; then sha256sum "$OUTFILE" > "${OUTFILE}.sha256"; fi
 
-COUNT=$(echo "$FINAL_JSON" | jq '.coins | length' 2>/dev/null) || COUNT=0
-echo "✅ Guardado $OUTFILE con $COUNT monedas"
-
-# --- 5. Commit & Push ---
+# --- 6. Commit & Push ---
 git config user.name "github-actions[bot]" 2>/dev/null || true
 git config user.email "41898282+github-actions[bot]@users.noreply.github.com" 2>/dev/null || true
 git add "$OUTFILE" "$COINS_FILE" "${OUTFILE}.sha256" 2>/dev/null || true
+
 if git diff --cached --quiet 2>/dev/null; then
-  echo "📦 Sin cambios"
+  echo "📦 Sin cambios nuevos para commitear"
 else
-  git commit -m "📊 snapshot $TODAY ($COUNT coins)" >/dev/null 2>&1
+  git commit -m "📊 snapshot $TODAY" >/dev/null 2>&1
   git push >/dev/null 2>&1 || echo "⚠️ Push fallido"
 fi
+echo "🏁 SCRIPT FINALIZADO"
