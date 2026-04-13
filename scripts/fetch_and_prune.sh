@@ -113,13 +113,19 @@ done
 # --- 5. Limpieza, validación y ESCRITURA FORZADA ---
 for pruned in $PRUNED_LIST; do COINS_JSON=$(echo "$COINS_JSON" | jq --arg c "$pruned" 'del(.[$c])' 2>/dev/null) || true; done
 
-COINS_JSON=$(echo "$COINS_JSON" | jq -c '.')  # Compactar a 1 línea para --argjson
-FINAL_JSON=$(jq -n --arg date "$TODAY" --argjson coins "$COINS_JSON" '{date:$date, coins:$coins}')
+#COINS_JSON=$(echo "$COINS_JSON" | jq -c '.')  # Compactar a 1 línea para --argjson
+FINAL_JSON=$(jq -n --arg date "$TODAY" --argjson coins "$COINS_JSON" \
+  '{date: $date, coins: $coins}' 2>/dev/null) || {
+  echo "❌ ERROR: Failed to build final JSON"
+  exit 1
+}
+
+# Validar y guardar
 if ! echo "$FINAL_JSON" | jq empty 2>/dev/null; then
-  echo "❌ JSON final inválido. Abortando."; exit 1
+  echo "❌ ERROR: Final JSON is invalid"
+  exit 1
 fi
 echo "$FINAL_JSON" > "$OUTFILE"
-echo "💾 JSON escrito: $TODAY"
 
 # 🔐 SHA256
 if command -v sha256sum >/dev/null 2>&1; then sha256sum "$OUTFILE" > "${OUTFILE}.sha256"; fi
