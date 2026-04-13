@@ -10,14 +10,6 @@ echo "🚀 INICIO: $(date -u)"
 TODAY=$(date -u +%Y-%m-%d)
 CUTOFF=$(date -u -d "2 days ago" +%Y-%m-%d 2>/dev/null || date -u -v-2d +%Y-%m-%d)
 
-# 📅 Claves absolutas UTC (siempre 6 registros)
-D1=$(date -u -d "1 day ago" +%Y-%m-%d 2>/dev/null || date -u -v-1d +%Y-%m-%d)
-D2=$(date -u -d "2 days ago" +%Y-%m-%d 2>/dev/null || date -u -v-2d +%Y-%m-%d)
-D7=$(date -u -d "7 days ago" +%Y-%m-%d 2>/dev/null || date -u -v-7d +%Y-%m-%d)
-D8=$(date -u -d "8 days ago" +%Y-%m-%d 2>/dev/null || date -u -v-8d +%Y-%m-%d)
-D30=$(date -u -d "30 days ago" +%Y-%m-%d 2>/dev/null || date -u -v-30d +%Y-%m-%d)
-D31=$(date -u -d "31 days ago" +%Y-%m-%d 2>/dev/null || date -u -v-31d +%Y-%m-%d)
-
 echo "📅 TODAY: $TODAY | CUTOFF: $CUTOFF"
 
 # --- 1. Leer y depurar coins_list.txt ---
@@ -65,67 +57,86 @@ for coin in "${!COIN_DATES[@]}"; do
 done
 echo "  📦 A consultar: ${FETCH_LIST[*]:-Ninguna}"
 
-# --- 4. Fetch & Merge (EXTRACCIÓN PURA + FORMATEO EN JQ, SIN SHELL INTERMEDIO) ---
+# --- Helpers (LOS MISMOS QUE YA FUNCIONABAN) ---
+round_price() {
+  local p="$1"
+  if [ -z "$p" ] || [ "$p" = "null" ]; then
+    echo "null"
+  else
+    echo "$p" | awk '{if($1>=1) printf "%.2f",$1; else printf "%.8f",$1}'
+  fi
+}
+
+get_price_at_2359() {
+  local json_data="$1"
+  local target_date="$2"
+  local price
+  price=$(echo "$json_data" | jq --arg td "$target_date" '
+    .prices 
+    | map(select((.[0] / 1000 | todate | split("T")[0]) == $td))
+    | if length > 0 then last | .[1] else null end
+  ' 2>/dev/null) || price="null"
+  round_price "$price"
+}
+
+# --- 4. Fetch & Merge (CON CLAVES DE FECHA ABSOLUTA) ---
 for coin in "${FETCH_LIST[@]}"; do
   echo "  🔍 $coin ..."
   RESP=$(curl -sS --max-time 20 --retry 2 "https://api.coingecko.com/api/v3/coins/${coin}/market_chart?vs_currency=usd&days=35" 2>&1) || { echo "  ❌ curl"; continue; }
   echo "$RESP" | jq empty >/dev/null 2>&1 || { echo "  ❌ JSON inválido"; continue; }
 
-  # ✅ Paso 1: Extracción PURA en jq (valores nativos: números o null)
-  RAW_ENTRY=$(echo "$RESP" | jq --arg d1 "$D1" --arg d2 "$D2" --arg d7 "$D7" --arg d8 "$D8" --arg d30 "$D30" --arg d31 "$D31" '
-    def get_close(t):
-      .prices 
-      | map(select((.[0]/1000 | todate | split("T")[0]) == t))
-      | if length > 0 then last | .[1] else null end;
-    {
-      ($d1):  (. | get_close($d1)),
-      ($d2):  (. | get_close($d2)),
-      ($d7):  (. | get_close($d7)),
-      ($d8):  (. | get_close($d8)),
-      ($d30): (. | get_close($d30)),
-      ($d31): (. | get_close($d31))
-    }
-  ' 2>/dev/null)
+  # Calcular las 6 fechas UTC
+  D1=$(date -u -d "1 day ago" +%Y-%m-%d 2>/dev/null || date -u -v-1d +%Y-%m-%d)
+  D2=$(date -u -d "2 days ago" +%Y-%m-%d 2>/dev/null || date -u -v-2d +%Y-%m-%d)
+  D7=$(date -u -d "7 days ago" +%Y-%m-%d 2>/dev/null || date -u -v-7d +%Y-%m-%d)
+  D8=$(date -u -d "8 days ago" +%Y-%m-%d 2>/dev/null || date -u -v-8d +%Y-%m-%d)
+  D30=$(date -u -d "30 days ago" +%Y-%m-%d 2>/dev/null || date -u -v-30d +%Y-%m-%d)
+  D31=$(date -u -d "31 days ago" +%Y-%m-%d 2>/dev/null || date -u -v-31d +%Y-%m-%d)
 
-  # ✅ Paso 2: Formateo FINAL en jq (aplicado al JSON ya válido)
-  ENTRY=$(echo "$RAW_ENTRY" | jq '
-    to_entries | map(
-      .value = (
-        if .value == null then null
-        elif .value >= 1 then ((.value * 100 | round) / 100)
-        else ((.value * 100000000 | round) / 100000000)
-        end
-      )
-    ) | from_entries
-  ' 2>/dev/null)
+  # Extraer precios con helpers probados
+  P1=$(get_price_at_2359 "$RESP" "$D1")
+  P2=$(get_price_at_2359 "$RESP" "$D2")
+  P7=$(get_price_at_2359 "$RESP" "$D7")
+  P8=$(get_price_at_2359 "$RESP" "$D8")
+  P30=$(get_price_at_2359 "$RESP" "$D30")
+  P31=$(get_price_at_2359 "$RESP" "$D31")
 
-  # Validar que ENTRY es un objeto JSON válido
-  if [ -z "$ENTRY" ] || ! echo "$ENTRY" | jq -e 'type == "object"' >/dev/null 2>&1; then
-    echo "  ❌ No se extrajeron precios válidos"; continue
+  # ✅ Construir ENTRY con claves de fecha absoluta (NO d1/d2)
+  ENTRY=$(jq -n \
+    --arg d1 "$D1" --arg p1 "$P1" \
+    --arg d2 "$D2" --arg p2 "$P2" \
+    --arg d7 "$D7" --arg p7 "$P7" \
+    --arg d8 "$D8" --arg p8 "$P8" \
+    --arg d30 "$D30" --arg p30 "$P30" \
+    --arg d31 "$D31" --arg p31 "$P31" \
+    '{($d1):$p1, ($d2):$p2, ($d7):$p7, ($d8):$p8, ($d30):$p30, ($d31):$p31}')
+
+  # Validar ENTRY
+  if [ -z "$ENTRY" ] || ! echo "$ENTRY" | jq empty 2>/dev/null; then
+    echo "  ❌ ENTRY inválido"; continue
   fi
 
-  # Fusionar en COINS_JSON
+  # 🔑 COMPACTAR COINS_JSON antes de --argjson (evita error de saltos de línea)
+  COINS_JSON=$(echo "$COINS_JSON" | jq -c '.')
+  
+  # Fusionar
   COINS_JSON=$(echo "$COINS_JSON" | jq --arg c "$coin" --argjson e "$ENTRY" '.[$c] = $e' 2>/dev/null) || { echo "  ❌ merge falló"; continue; }
-  echo "  ✅ $coin → $(echo "$ENTRY" | jq -r 'to_entries | map(.key) | join(", ")')"
+  echo "  ✅ $coin → $D1, $D2, $D7, $D8, $D30, $D31"
   sleep 6
 done
 
-# --- 5. Limpieza, validación y ESCRITURA FORZADA ---
+# --- 5. Limpieza y escritura ---
 for pruned in $PRUNED_LIST; do COINS_JSON=$(echo "$COINS_JSON" | jq --arg c "$pruned" 'del(.[$c])' 2>/dev/null) || true; done
 
-#COINS_JSON=$(echo "$COINS_JSON" | jq -c '.')  # Compactar a 1 línea para --argjson
-FINAL_JSON=$(jq -n --arg date "$TODAY" --argjson coins "$COINS_JSON" \
-  '{date: $date, coins: $coins}' 2>/dev/null) || {
-  echo "❌ ERROR: Failed to build final JSON"
-  exit 1
-}
+# Compactar antes del merge final
+COINS_JSON=$(echo "$COINS_JSON" | jq -c '.')
 
-# Validar y guardar
+FINAL_JSON=$(jq -n --arg date "$TODAY" --argjson coins "$COINS_JSON" '{date:$date, coins:$coins}')
 if ! echo "$FINAL_JSON" | jq empty 2>/dev/null; then
-  echo "❌ ERROR: Final JSON is invalid"
-  exit 1
+  echo "❌ JSON final inválido"; exit 1
 fi
 echo "$FINAL_JSON" > "$OUTFILE"
+echo "💾 JSON escrito: $TODAY"
 
 # 🔐 SHA256
 if command -v sha256sum >/dev/null 2>&1; then sha256sum "$OUTFILE" > "${OUTFILE}.sha256"; fi
