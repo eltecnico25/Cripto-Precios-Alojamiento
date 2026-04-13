@@ -113,6 +113,7 @@ done
 # --- 5. Limpieza, validación y ESCRITURA FORZADA ---
 for pruned in $PRUNED_LIST; do COINS_JSON=$(echo "$COINS_JSON" | jq --arg c "$pruned" 'del(.[$c])' 2>/dev/null) || true; done
 
+COINS_JSON=$(echo "$COINS_JSON" | jq -c '.')  # Compactar a 1 línea para --argjson
 FINAL_JSON=$(jq -n --arg date "$TODAY" --argjson coins "$COINS_JSON" '{date:$date, coins:$coins}')
 if ! echo "$FINAL_JSON" | jq empty 2>/dev/null; then
   echo "❌ JSON final inválido. Abortando."; exit 1
