@@ -110,7 +110,7 @@ for coin in "${FETCH_LIST[@]}"; do
     --argjson d8 "$D8" --argjson p8 "$P8" \
     --argjson d30 "$D30" --argjson p30 "$P30" \
     --argjson d31 "$D31" --argjson p31 "$P31" \
-    '{($d1):$p1, ($d2):$p2, ($d7):$p7, ($d8):$p8, ($d30):$p30, ($d31):$p31}')
+    '{$d1:$p1, $d2:$p2, $d7:$p7, $d8:$p8, $d30:$p30, $d31:$p31}')
 
   # Validar ENTRY
   if [ -z "$ENTRY" ] || ! echo "$ENTRY" | jq empty 2>/dev/null; then
