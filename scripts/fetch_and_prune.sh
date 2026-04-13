@@ -82,7 +82,8 @@ get_price_at_2359() {
 # --- 4. Fetch & Merge (CON CLAVES DE FECHA ABSOLUTA) ---
 for coin in "${FETCH_LIST[@]}"; do
   echo "  🔍 $coin ..."
-  RESP=$(curl -sS --max-time 20 --retry 2 "https://api.coingecko.com/api/v3/coins/${coin}/market_chart?vs_currency=usd&days=35" 2>&1) || { echo "  ❌ curl"; continue; }
+  RESP=$(curl -sS --max-time 20 --retry 2  --retry-delay 5 \
+  "https://api.coingecko.com/api/v3/coins/${coin}/market_chart?vs_currency=usd&days=35" 2>&1) || { echo "  ❌ curl"; continue; }
   echo "$RESP" | jq empty >/dev/null 2>&1 || { echo "  ❌ JSON inválido"; continue; }
 
   # Calcular las 6 fechas UTC
@@ -103,12 +104,12 @@ for coin in "${FETCH_LIST[@]}"; do
 
   # ✅ Construir ENTRY con claves de fecha absoluta (NO d1/d2)
   ENTRY=$(jq -n \
-    --argjson d1 "$D1" --arg p1 "$P1" \
-    --argjson d2 "$D2" --arg p2 "$P2" \
-    --argjson d7 "$D7" --arg p7 "$P7" \
-    --argjson d8 "$D8" --arg p8 "$P8" \
-    --argjson d30 "$D30" --arg p30 "$P30" \
-    --argjson d31 "$D31" --arg p31 "$P31" \
+    --argjson d1 "$D1" --argjson p1 "$P1" \
+    --argjson d2 "$D2" --argjson p2 "$P2" \
+    --argjson d7 "$D7" --argjson p7 "$P7" \
+    --argjson d8 "$D8" --argjson p8 "$P8" \
+    --argjson d30 "$D30" --argjson p30 "$P30" \
+    --argjson d31 "$D31" --argjson p31 "$P31" \
     '{($d1):$p1, ($d2):$p2, ($d7):$p7, ($d8):$p8, ($d30):$p30, ($d31):$p31}')
 
   # Validar ENTRY
@@ -121,7 +122,7 @@ for coin in "${FETCH_LIST[@]}"; do
   
   # Fusionar
   COINS_JSON=$(echo "$COINS_JSON" | jq --arg c "$coin" --argjson e "$ENTRY" '.[$c] = $e' 2>/dev/null) || { echo "  ❌ merge falló"; continue; }
-  echo "  ✅ $coin → $D1, $D2, $D7, $D8, $D30, $D31"
+  echo "  ✅ $coin → $D1,$P1, $D2,$P2, $D7,$P7, $D8,$P1, $D30,$P30, $D31,$P31"
   sleep 6
 done
 
@@ -131,7 +132,8 @@ for pruned in $PRUNED_LIST; do COINS_JSON=$(echo "$COINS_JSON" | jq --arg c "$pr
 # Compactar antes del merge final
 COINS_JSON=$(echo "$COINS_JSON" | jq -c '.')
 
-FINAL_JSON=$(jq -n --arg date "$TODAY" --argjson coins "$COINS_JSON" '{date: $date, coins: $coins}')
+FINAL_JSON=$(jq -n --arg date "$TODAY" --argjson coins "$COINS_JSON" \
+    '{date: $date, coins: $coins}')
 if ! echo "$FINAL_JSON" | jq empty 2>/dev/null; then
   echo "❌ JSON final inválido"; exit 1
 fi
