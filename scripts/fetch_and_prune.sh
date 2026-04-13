@@ -103,12 +103,12 @@ for coin in "${FETCH_LIST[@]}"; do
 
   # ✅ Construir ENTRY con claves de fecha absoluta (NO d1/d2)
   ENTRY=$(jq -n \
-    --arg d1 "$D1" --arg p1 "$P1" \
-    --arg d2 "$D2" --arg p2 "$P2" \
-    --arg d7 "$D7" --arg p7 "$P7" \
-    --arg d8 "$D8" --arg p8 "$P8" \
-    --arg d30 "$D30" --arg p30 "$P30" \
-    --arg d31 "$D31" --arg p31 "$P31" \
+    --argjson d1 "$D1" --arg p1 "$P1" \
+    --argjson d2 "$D2" --arg p2 "$P2" \
+    --argjson d7 "$D7" --arg p7 "$P7" \
+    --argjson d8 "$D8" --arg p8 "$P8" \
+    --argjson d30 "$D30" --arg p30 "$P30" \
+    --argjson d31 "$D31" --arg p31 "$P31" \
     '{($d1):$p1, ($d2):$p2, ($d7):$p7, ($d8):$p8, ($d30):$p30, ($d31):$p31}')
 
   # Validar ENTRY
@@ -131,7 +131,7 @@ for pruned in $PRUNED_LIST; do COINS_JSON=$(echo "$COINS_JSON" | jq --arg c "$pr
 # Compactar antes del merge final
 COINS_JSON=$(echo "$COINS_JSON" | jq -c '.')
 
-FINAL_JSON=$(jq -n --arg date "$TODAY" --argjson coins "$COINS_JSON" '{date:$date, coins:$coins}')
+FINAL_JSON=$(jq -n --arg date "$TODAY" --argjson coins "$COINS_JSON" '{date: $date, coins: $coins}')
 if ! echo "$FINAL_JSON" | jq empty 2>/dev/null; then
   echo "❌ JSON final inválido"; exit 1
 fi
